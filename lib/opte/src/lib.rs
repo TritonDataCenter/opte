@@ -249,7 +249,7 @@ impl LogProvider for KernelLog {
         };
 
         let msg_arg = alloc::ffi::CString::new(msg).unwrap();
-        unsafe { ddi::cmn_err(cmn_level, msg_arg.as_ptr()) }
+        unsafe { ddi::cmn_err(cmn_level, c"%s".as_ptr(), msg_arg.as_ptr()) }
     }
 }
 
