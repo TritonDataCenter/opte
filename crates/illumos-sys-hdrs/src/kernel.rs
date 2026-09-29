@@ -559,59 +559,85 @@ unsafe extern "C" {
 
     pub fn msgsize(mp: *const mblk_t) -> size_t;
 
+    // On FreeBSD the sync routines link to prefixed shims: mutex_init,
+    // cv_init and others are FreeBSD kernel functions of their own.
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_mutex_destroy")]
     pub fn mutex_destroy(mp: *mut kmutex_t);
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_mutex_enter")]
     pub fn mutex_enter(mp: *mut kmutex_t);
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_mutex_exit")]
     pub fn mutex_exit(mp: *mut kmutex_t);
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_mutex_init")]
     pub fn mutex_init(
         mp: *mut kmutex_t,
         name: *const c_char,
         mtype: kmutex_type_t,
         arg: *const c_void,
     );
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_mutex_owned")]
     pub fn mutex_owned(mp: *mut kmutex_t) -> c_int;
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_mutex_tryenter")]
     pub fn mutex_tryenter(mp: *mut kmutex_t) -> c_int;
 
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_rw_init")]
     pub fn rw_init(
         rwlp: *mut krwlock_t,
         name: *const c_char,
         typ: krw_type_t,
         arg: *const c_void,
     );
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_rw_destroy")]
     pub fn rw_destroy(rwlp: *mut krwlock_t);
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_rw_enter")]
     pub fn rw_enter(rwlp: *mut krwlock_t, enter_type: krw_t);
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_rw_exit")]
     pub fn rw_exit(rwlp: *mut krwlock_t);
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_rw_tryenter")]
     pub fn rw_tryenter(rwlp: *mut krwlock_t, enter_type: krw_t);
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_rw_downgrade")]
     pub fn rw_downgrade(rwlp: *mut krwlock_t);
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_rw_tryupgrade")]
     pub fn rw_tryupgrade(rwlp: *mut krwlock_t);
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_rw_read_locked")]
     pub fn rw_read_locked(rwlp: *mut krwlock_t);
 
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_cv_init")]
     pub fn cv_init(
         cvp: *mut kcondvar_t,
         name: *const c_char,
         cv_type: kcv_type_t,
         arg: *mut c_void,
     );
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_cv_destroy")]
     pub fn cv_destroy(cvp: *mut kcondvar_t);
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_cv_wait")]
     pub fn cv_wait(cvp: *mut kcondvar_t, mp: *mut kmutex_t);
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_cv_signal")]
     pub fn cv_signal(cvp: *mut kcondvar_t);
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_cv_broadcast")]
     pub fn cv_broadcast(cvp: *mut kcondvar_t);
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_cv_wait_sig")]
     pub fn cv_wait_sig(cvp: *mut kcondvar_t, mp: *mut kmutex_t) -> c_int;
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_cv_timedwait")]
     pub fn cv_timedwait(
         cvp: *mut kcondvar_t,
         mp: *mut kmutex_t,
         timeout: clock_t,
     ) -> clock_t;
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_cv_timedwait_sig")]
     pub fn cv_timedwait_sig(
         cvp: *mut kcondvar_t,
         mp: *mut kmutex_t,
         timeout: clock_t,
     ) -> clock_t;
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_cv_reltimedwait")]
     pub fn cv_reltimedwait(
         cvp: *mut kcondvar_t,
         mp: *mut kmutex_t,
         delta: clock_t,
         res: time_res_t,
     ) -> clock_t;
+    #[cfg_attr(target_os = "freebsd", link_name = "illumos_cv_reltimedwait_sig")]
     pub fn cv_reltimedwait_sig(
         cvp: *mut kcondvar_t,
         mp: *mut kmutex_t,
