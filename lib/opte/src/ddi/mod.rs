@@ -7,6 +7,10 @@
 //! Various abstractions for using the illumos DDI/DKI.
 
 pub mod kstat;
+#[cfg(opte_pkt = "mblk")]
+pub mod mblk;
+#[cfg(opte_pkt = "mbuf")]
+#[path = "mbuf.rs"]
 pub mod mblk;
 pub mod sync;
 pub mod time;

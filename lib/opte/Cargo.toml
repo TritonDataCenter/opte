@@ -19,7 +19,7 @@ engine = [
 	"dep:smoltcp",
 	"dep:zerocopy"
 ]
-kernel = ["illumos-sys-hdrs/kernel", "dep:cfg-if"]
+kernel = ["illumos-sys-hdrs/kernel", "freebsd-sys-hdrs/kernel", "dep:cfg-if"]
 # This feature indicates that OPTE is being built with std. This is
 # mostly useful to consumers of the API, providing convenient methods
 # for working with the API types in a std context.
@@ -29,10 +29,14 @@ std = ["dep:tabwriter", "opte-api/std"]
 #
 test-help = []
 usdt = ["std", "dep:usdt"]
+# Carry packets in FreeBSD mbufs. Implied for FreeBSD kernel builds; on
+# other hosts it tests the mbuf backend against a userland allocator.
+mbuf = []
 
 [dependencies]
 derror-macro = { workspace = true, optional = true }
 illumos-sys-hdrs.workspace = true
+freebsd-sys-hdrs.workspace = true
 kstat-macro.workspace = true
 opte-api.workspace = true
 

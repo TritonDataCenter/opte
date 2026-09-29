@@ -37,6 +37,9 @@ use ingot::types::EmitDoesNotRelyOnBufContents;
 use ingot::types::ParseError as IngotParseErr;
 use ingot::types::Read;
 
+/// The raw OS packet type behind a [`MsgBlk`].
+pub type RawBuf = mblk_t;
+
 pub static MBLK_MAX_SIZE: usize = u16::MAX as usize;
 
 /// Abstractions over an `mblk_t` which can be returned to their

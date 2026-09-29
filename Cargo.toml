@@ -26,6 +26,7 @@ repository = "https://github.com/oxidecomputer/opte"
 # Internal crates
 derror-macro = { path = "crates/derror-macro" }
 illumos-sys-hdrs = { path = "crates/illumos-sys-hdrs" }
+freebsd-sys-hdrs = { path = "crates/freebsd-sys-hdrs" }
 kstat-macro = { path = "crates/kstat-macro" }
 opte-api = { path = "crates/opte-api", default-features = false }
 
