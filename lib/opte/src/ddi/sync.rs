@@ -117,7 +117,7 @@ impl<T> KMutex<T> {
     /// must be done by acquiring a `KMutexGuard` via the `lock()`
     /// method.
     pub fn new(val: T) -> Self {
-        let mut kmutex = kmutex_t { _opaque: 0 };
+        let mut kmutex = kmutex_t::default();
         // TODO This assumes the mutex is never used in interrupt
         // context. Need to pass 4th arg to set priority.
         //
@@ -302,7 +302,7 @@ impl From<KRwEnterType> for krw_t {
 #[cfg(all(not(feature = "std"), not(test)))]
 impl<T> KRwLock<T> {
     pub fn new(val: T) -> Self {
-        let mut rwl = krwlock_t { _opaque: 0 };
+        let mut rwl = krwlock_t::default();
         unsafe {
             rw_init(
                 &mut rwl,
@@ -459,7 +459,7 @@ pub struct KCondvar {
 impl KCondvar {
     /// Create a new condition variable.
     pub fn new() -> Self {
-        let mut cv = kcondvar_t { _opaque: 0 };
+        let mut cv = kcondvar_t::default();
 
         unsafe {
             cv_init(

@@ -202,10 +202,14 @@ pub enum kmutex_type_t {
 
 // This type is opaque to us, we just need to define it here to make
 // sure it's a sized type, and that size should be 64-bit to match the
-// kernel.
+// kernel. On FreeBSD it holds a `struct mtx`.
 #[repr(C)]
+#[derive(Default)]
 pub struct kmutex_t {
+    #[cfg(not(target_os = "freebsd"))]
     pub _opaque: u64,
+    #[cfg(target_os = "freebsd")]
+    pub _opaque: [u64; 4],
 }
 
 // ======================================================================
@@ -225,9 +229,14 @@ pub enum krw_type_t {
 // uts/common/sys/condvar.h
 // ======================================================================
 
+/// On FreeBSD this holds a `struct cv`.
 #[repr(C)]
+#[derive(Default)]
 pub struct kcondvar_t {
+    #[cfg(not(target_os = "freebsd"))]
     pub _opaque: c_ushort,
+    #[cfg(target_os = "freebsd")]
+    pub _opaque: [u64; 2],
 }
 
 #[repr(transparent)]

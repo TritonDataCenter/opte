@@ -54,7 +54,7 @@ impl ddi_reset_cmd_t {
 // somewhere else.
 impl kmutex_t {
     pub fn new(mtype: kmutex_type_t) -> Self {
-        let mut kmutex = kmutex_t { _opaque: 0 };
+        let mut kmutex = kmutex_t::default();
         unsafe {
             mutex_init(&mut kmutex, ptr::null(), mtype, ptr::null());
         }
@@ -62,9 +62,14 @@ impl kmutex_t {
     }
 }
 
+/// On FreeBSD this holds a `struct rwlock`.
 #[repr(C)]
+#[derive(Default)]
 pub struct krwlock_t {
+    #[cfg(not(target_os = "freebsd"))]
     pub _opaque: u64,
+    #[cfg(target_os = "freebsd")]
+    pub _opaque: [u64; 4],
 }
 
 /// Lock acquisition type passed to `rw_[try]enter(9F)`.
