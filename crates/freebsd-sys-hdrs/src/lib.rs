@@ -66,6 +66,7 @@ pub const CSUM_INNER_IP_UDP: u32 = 0x0000_8000;
 pub const CSUM_INNER_IP_TCP: u32 = 0x0001_0000;
 pub const CSUM_INNER_IP_TSO: u32 = 0x0002_0000;
 pub const CSUM_ENCAP_VXLAN: u32 = 0x0004_0000;
+/// FreeBSD 16 and later; reserved in 15.
 pub const CSUM_ENCAP_GENEVE: u32 = 0x0008_0000;
 pub const CSUM_INNER_L3_CALC: u32 = 0x0010_0000;
 pub const CSUM_INNER_L3_VALID: u32 = 0x0020_0000;
@@ -384,8 +385,14 @@ unsafe extern "C" {
         type_: c_short,
         flags: c_int,
     ) -> *mut mbuf;
+    /// Like `m_get2`, but up to `MJUM16BYTES`.
+    pub fn m_get3(
+        size: c_int,
+        how: c_int,
+        type_: c_short,
+        flags: c_int,
+    ) -> *mut mbuf;
     pub fn m_freem(m: *mut mbuf);
-    pub fn m_freemp(m: *mut mbuf);
     pub fn m_copym(
         m: *mut mbuf,
         off: c_int,

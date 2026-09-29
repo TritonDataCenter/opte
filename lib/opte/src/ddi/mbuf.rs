@@ -38,7 +38,6 @@ use core::ptr::NonNull;
 use core::slice;
 use freebsd_sys_hdrs as sys;
 pub use freebsd_sys_hdrs::mbuf;
-use illumos_sys_hdrs::mac::MacTunType;
 use illumos_sys_hdrs::mac::MblkOffloadFlags;
 use illumos_sys_hdrs::mac::mac_ether_offload_info_t;
 use illumos_sys_hdrs::uintptr_t;
@@ -724,6 +723,8 @@ impl MsgBlk {
     }
 
     /// Record header lengths for tunnel-aware offloads in `m_pkthdr`.
+    /// The encapsulation type flag is left to the caller: FreeBSD 15 has
+    /// no `CSUM_ENCAP_GENEVE`, and its bit is reserved there.
     pub fn fill_parse_info(
         &mut self,
         outer_meoi: &mac_ether_offload_info_t,
@@ -752,11 +753,7 @@ impl MsgBlk {
                 lens.inner_l4hlen = inner.meoi_l4hlen;
             }
 
-            let pkthdr = (*m).pkthdr_mut();
-            pkthdr.set_hdrlens(lens);
-            if outer_meoi.meoi_tuntype == MacTunType::GENEVE {
-                pkthdr.csum_flags |= sys::CSUM_ENCAP_GENEVE;
-            }
+            (*m).pkthdr_mut().set_hdrlens(lens);
         }
 
         Ok(())
@@ -1312,8 +1309,8 @@ unsafe fn kernel_alloc(size: usize) -> *mut mbuf {
     use alloc::alloc::Layout;
 
     unsafe {
-        if size <= sys::MJUMPAGESIZE {
-            return sys::m_get2(
+        if size <= sys::MJUM16BYTES {
+            return sys::m_get3(
                 size as c_int,
                 sys::M_NOWAIT,
                 sys::MT_DATA,
@@ -1458,6 +1455,7 @@ mod test {
     use crate::engine::GenericUlp;
     use crate::engine::packet::Packet;
     use crate::engine::packet::ParseError;
+    use illumos_sys_hdrs::mac::MacTunType;
     use ingot::types::ParseError as IngotParseError;
 
     fn head(pkt: &MsgBlk) -> &mbuf {
@@ -1801,7 +1799,7 @@ mod test {
             (lens.inner_l2hlen, lens.inner_l3hlen, lens.inner_l4hlen),
             (14, 20, 20)
         );
-        assert_ne!(ph.csum_flags & sys::CSUM_ENCAP_GENEVE, 0);
+        assert_eq!(ph.csum_flags, 0);
     }
 
     #[test]
