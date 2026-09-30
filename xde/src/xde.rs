@@ -2068,9 +2068,7 @@ unsafe extern "C" fn xde_mc_getstat(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn xde_mc_start(arg: *mut c_void) -> c_int {
     let dev = arg as *mut XdeDev;
-    let mut port = unsafe {
-        (*dev).port.write()
-    };
+    let mut port = unsafe { (*dev).port.write() };
     port.start();
     0
 }
@@ -2080,9 +2078,7 @@ unsafe extern "C" fn xde_mc_start(arg: *mut c_void) -> c_int {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn xde_mc_stop(arg: *mut c_void) {
     let dev = arg as *mut XdeDev;
-    let mut port = unsafe {
-        (*dev).port.write()
-    };
+    let mut port = unsafe { (*dev).port.write() };
     port.reset();
 }
 
@@ -4564,7 +4560,6 @@ fn clear_uft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let dev = devs
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
-
 
     dev.port.read().clear_uft()?;
     Ok(NoResp::default())

@@ -336,11 +336,7 @@ impl BenchPacketInstance for UlpProcessInstance {
                 port_name: g1.port.name().to_string(),
                 rules: vec![any_in.parse().unwrap()],
             };
-            firewall::set_fw_rules(
-                &mut g1.port,
-                &req,
-            )
-            .unwrap();
+            firewall::set_fw_rules(&mut g1.port, &req).unwrap();
             update!(
                 g1,
                 [

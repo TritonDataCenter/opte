@@ -15,6 +15,7 @@ use crate::ddi::time::MILLIS;
 use crate::ddi::time::Moment;
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
+use alloc::collections::btree_map::Entry;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -44,8 +45,6 @@ pub const FLOW_DEF_EXPIRE_SECS: u64 = 60;
 pub const FLOW_DEF_TTL: Ttl = Ttl::new_seconds(FLOW_DEF_EXPIRE_SECS);
 
 pub const FLOW_TABLE_DEF_MAX_ENTRIES: u32 = 8192;
-
-type Result<T> = core::result::Result<T, OpteError>;
 
 /// The Time To Live in milliseconds.
 #[derive(Clone, Copy, Debug)]
@@ -169,7 +168,10 @@ pub trait FlowEntryInfo: fmt::Debug + Send + Sync {
     fn eviction_priority(&self, now: Moment) -> Option<EvictionPriority>;
 
     /// Set `self` as a parent node to `child`.
-    fn push_child(&self, child: &Arc<dyn FlowEntryInfo>) -> Result<()>;
+    fn push_child(
+        &self,
+        child: &Arc<dyn FlowEntryInfo>,
+    ) -> Result<(), FlowTableError>;
 
     /// Remove `child` from this entry's list of children.
     fn remove_child(&self, child: &Arc<dyn FlowEntryInfo>);
@@ -229,7 +231,10 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
         best_prio
     }
 
-    fn push_child(&self, child: &Arc<dyn FlowEntryInfo>) -> Result<()> {
+    fn push_child(
+        &self,
+        child: &Arc<dyn FlowEntryInfo>,
+    ) -> Result<(), FlowTableError> {
         let mut children = self.lifetime.children.write();
 
         // Sadly, BTreeSet::entry remains a nightly API.
@@ -241,7 +246,7 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
             self.lifetime.n_children.store(children.len(), Ordering::Relaxed);
             Ok(())
         } else {
-            Err(OpteError::MaxCapacity(
+            Err(FlowTableError::MaxCapacity(
                 u64::try_from(Self::MAX_CHILDREN).expect("usize is u64"),
             ))
         }
@@ -269,6 +274,12 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
 }
 
 pub type FlowTableDump<T> = Vec<(InnerFlowId, T)>;
+
+#[derive(Debug)]
+pub enum FlowTableError {
+    MaxCapacity(u64),
+    Existing,
+}
 
 #[derive(Debug)]
 pub struct FlowTable<S: FlowState> {
@@ -323,11 +334,20 @@ impl<S: FlowState> FlowTable<S> {
         &mut self,
         flow_id: InnerFlowId,
         state: S,
-    ) -> Result<Arc<FlowEntry<S>>> {
+    ) -> Result<Arc<FlowEntry<S>>, FlowTableError> {
         self.check_for_space()?;
         let entry = Arc::new(FlowEntry::new(flow_id, state, self));
-        self.map.insert(flow_id, Arc::clone(&entry));
-        Ok(entry)
+        match self.map.entry(flow_id) {
+            Entry::Vacant(slot) => {
+                slot.insert(Arc::clone(&entry));
+                Ok(entry)
+            }
+            Entry::Occupied(slot) if slot.get().is_killed() => {
+                *slot.into_mut() = Arc::clone(&entry);
+                Ok(entry)
+            }
+            Entry::Occupied(_) => Err(FlowTableError::Existing),
+        }
     }
 
     /// Add a new entry to the flow table while eliding the capacity check.
@@ -526,7 +546,7 @@ impl<S: FlowState> FlowTable<S> {
     /// inserted.
     ///
     /// If out of space, this method will attempt to evict an existing entry.
-    pub fn check_for_space(&mut self) -> Result<()> {
+    pub fn check_for_space(&mut self) -> Result<(), FlowTableError> {
         if self.map.len() < self.limit.get() as usize {
             return Ok(());
         }
@@ -535,7 +555,7 @@ impl<S: FlowState> FlowTable<S> {
             self.expire(&key, true);
             Ok(())
         } else {
-            Err(OpteError::MaxCapacity(self.limit.get() as u64))
+            Err(FlowTableError::MaxCapacity(self.limit.get() as u64))
         }
     }
 
