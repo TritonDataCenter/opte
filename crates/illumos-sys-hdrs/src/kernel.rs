@@ -637,7 +637,10 @@ unsafe extern "C" {
         delta: clock_t,
         res: time_res_t,
     ) -> clock_t;
-    #[cfg_attr(target_os = "freebsd", link_name = "illumos_cv_reltimedwait_sig")]
+    #[cfg_attr(
+        target_os = "freebsd",
+        link_name = "illumos_cv_reltimedwait_sig"
+    )]
     pub fn cv_reltimedwait_sig(
         cvp: *mut kcondvar_t,
         mp: *mut kmutex_t,
