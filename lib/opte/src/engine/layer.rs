@@ -40,7 +40,9 @@ use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::time::Moment;
+use crate::engine::flow_table::FLOW_DEF_TTL;
 use crate::engine::flow_table::FlowState;
+use crate::engine::flow_table::TtlDelegateTcp;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -241,11 +243,11 @@ impl LayerFlowTable {
     fn expire_flows(&mut self, now: Moment) {
         // Flow table in/out entries share a lifetime struct, so it's irrelevant
         // which of these tables we check first.
-        let to_expire =
-            self.ft_out.expire_flows(now, LftOutEntry::extract_pair);
-        for flow in to_expire {
-            self.ft_in.expire(&flow);
-        }
+        self.ft_out.expire_flows_partner(
+            &mut self.ft_in,
+            LftOutEntry::extract_pair,
+            now,
+        );
         self.count = self.ft_out.num_flows();
     }
 
@@ -326,13 +328,53 @@ impl LayerFlowTable {
         Self {
             count: 0,
             limit,
-            ft_in: FlowTable::new(port, &format!("{layer}_in"), limit, None),
-            ft_out: FlowTable::new(port, &format!("{layer}_out"), limit, None),
+            ft_in: FlowTable::new(
+                port,
+                &format!("{layer}_in"),
+                limit,
+                Some(Arc::new(TtlDelegateTcp(FLOW_DEF_TTL))),
+            ),
+            ft_out: FlowTable::new(
+                port,
+                &format!("{layer}_out"),
+                limit,
+                Some(Arc::new(TtlDelegateTcp(FLOW_DEF_TTL))),
+            ),
         }
     }
 
     fn num_flows(&self) -> u32 {
         self.count
+    }
+
+    #[inline(always)]
+    /// Determine whether there is currently space for a new entry to be
+    /// inserted.
+    ///
+    /// If out of space, this method will attempt to evict an existing entry.
+    fn check_for_space(
+        &mut self,
+        stats: &KStatNamed<LayerStats>,
+        layer_name: &'static str,
+        dir: Direction,
+    ) -> result::Result<SpaceCreated, LayerError> {
+        if self.count < self.limit.get() {
+            return Ok(SpaceCreated::AmpleSpace);
+        }
+
+        // Both in/out share the same `killed` flag, children, and evictability,
+        // so we only need to check the outbound table.
+        if let Some((out_key, out_entry)) = self.ft_out.find_evictable_entry() {
+            let in_key = out_entry.state().in_flow_pair;
+            Ok(SpaceCreated::Evict { out_key, in_key })
+        } else {
+            let stat = match dir {
+                Direction::In => &stats.vals.in_lft_full,
+                Direction::Out => &stats.vals.out_lft_full,
+            };
+            stat.incr(1);
+            Err(LayerError::FlowTableFull { layer: layer_name, dir })
+        }
     }
 }
 
@@ -803,40 +845,16 @@ impl Layer {
         }
     }
 
-    /// Determine whether there is currently space for a new entry to be
-    /// inserted.
-    ///
-    /// If out of space, this method will attempt to evict an existing entry.
-    fn check_for_space(
-        &self,
-        dir: Direction,
-    ) -> result::Result<SpaceCreated, LayerError> {
-        if self.ft.count < self.ft.limit.get() {
-            return Ok(SpaceCreated::AmpleSpace);
-        }
-
-        // Both in/out share the same `killed` flag, children, and evictability,
-        // so we only need to check the outbound table.
-        if let Some((out_key, out_entry)) =
-            self.ft.ft_out.find_evictable_entry()
-        {
-            let in_key = out_entry.state().in_flow_pair;
-            Ok(SpaceCreated::Evict { out_key, in_key })
-        } else {
-            let stat = match dir {
-                Direction::In => &self.stats.vals.in_lft_full,
-                Direction::Out => &self.stats.vals.out_lft_full,
-            };
-            stat.incr(1);
-            Err(LayerError::FlowTableFull { layer: self.name, dir })
-        }
-    }
-
     fn complete_eviction(&mut self, entry: SpaceCreated) {
         if let SpaceCreated::Evict { in_key, out_key } = entry {
             self.stats.vals.evictions.incr(1);
-            self.ft.ft_out.expire(&out_key);
-            self.ft.ft_in.expire(&in_key);
+
+            // These two entries share the same `FlowLifetime`, so
+            // we can avoid wasting work by marking all children as
+            // `killed` only for the first entry.
+            self.ft.ft_out.expire(&out_key, true);
+            self.ft.ft_in.expire(&in_key, false);
+
             self.ft.count = self.ft.ft_out.num_flows();
         }
     }
@@ -961,7 +979,8 @@ impl Layer {
             Action::Allow => Ok(LayerResult::Allow),
 
             Action::StatefulAllow => {
-                let write_to = self.check_for_space(In)?;
+                let write_to =
+                    self.ft.check_for_space(&self.stats, self.name, In)?;
                 self.complete_eviction(write_to);
 
                 // The outbound flow ID mirrors the inbound. Remember,
@@ -1067,7 +1086,8 @@ impl Layer {
                 // In general, the semantic of a StatefulAction is
                 // that it gets an FT entry. If there are no slots
                 // available, then we must fail until one opens up.
-                let write_to = self.check_for_space(In)?;
+                let write_to =
+                    self.ft.check_for_space(&self.stats, self.name, In)?;
 
                 let desc = match action.gen_desc(pkt.flow(), pkt, ameta) {
                     Ok(aord) => match aord {
@@ -1247,7 +1267,8 @@ impl Layer {
             Action::Allow => Ok(LayerResult::Allow),
 
             Action::StatefulAllow => {
-                let write_to = self.check_for_space(Out)?;
+                let write_to =
+                    self.ft.check_for_space(&self.stats, self.name, Out)?;
                 self.complete_eviction(write_to);
 
                 // The inbound flow ID must be calculated _after_ the
@@ -1359,7 +1380,8 @@ impl Layer {
                 // In general, the semantic of a StatefulAction is
                 // that it gets an FT entry. If there are no slots
                 // available, then we must fail until one opens up.
-                let write_to = self.check_for_space(Out)?;
+                let write_to =
+                    self.ft.check_for_space(&self.stats, self.name, Out)?;
 
                 let desc = match action.gen_desc(pkt.flow(), pkt, ameta) {
                     Ok(aord) => match aord {

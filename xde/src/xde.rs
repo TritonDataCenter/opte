@@ -126,6 +126,19 @@
 //!    is kept per-port, updated by `refresh_maps()` whenever the canonical
 //!    forwarding table changes.
 //!
+//! ### Multicast directions
+//! The multicast state stores, and the identity/membership split between
+//! them, are described in detail in the [`overlay`] module docs. XDE implements
+//! both directions over that state. In the Rx path, described above, an
+//! encapsulated packet addressed to an admin-local underlay group, whether
+//! sent by a guest on another sled or from outside the rack, is fanned out
+//! to the ports on this sled that subscribed to it. Each copy goes through
+//! that member's source filter before the port's inbound processing
+//! decapsulates it. For the other
+//! direction, the per-port `mcast_fwd` state and Tx fan-out serve
+//! guest-originated sends, which resolve the group through the M2P table
+//! during encapsulation, before XDE's multicast forwarding stage.
+//!
 //! ### [`TokenLock`] and [`DevMap`] updates
 //! The `TokenLock` primitive provides us with logical mutual exclusion around
 //! the underlay and the ability to modify the canonical [`DevMap`] -- without
@@ -148,6 +161,8 @@
 //! the final `refresh_maps()` calls during port deletion). The management lock
 //! ensures no concurrent modifications, allowing underlay port Arcs to be
 //! safely unwrapped.
+//!
+//! [`overlay`]: oxide_vpc::engine::overlay
 
 use crate::dev_map::DevMap;
 use crate::dev_map::ReadOnlyDevMap;
@@ -548,6 +563,8 @@ struct XdeState {
     stats: KStatNamed<XdeStats>,
     #[allow(unused)]
     cleanup: Periodic<()>,
+    #[allow(unused)]
+    autonomous_packets: Periodic<()>,
 }
 
 /// Resource sets which require ioctl-level mutual exclusion to modify. Not all
@@ -606,6 +623,12 @@ impl XdeState {
             cleanup: Periodic::new(
                 c"XDE flow/cache expiry".to_owned(),
                 shared_periodic_expire,
+                Box::new(()),
+                ONE_SECOND,
+            ),
+            autonomous_packets: Periodic::new(
+                c"XDE periodic packet check".to_owned(),
+                check_for_autonomous_packets,
                 Box::new(()),
                 ONE_SECOND,
             ),
@@ -1154,6 +1177,40 @@ fn shared_periodic_expire(_: &mut ()) {
         let _ = dev.port.expire_flows();
         dev.routes.remove_routes();
     }
+}
+
+/// Function run under a `Periodic` that checks for autonomously-generated
+/// packets to deliver to each port.
+#[unsafe(no_mangle)]
+fn check_for_autonomous_packets(_: &mut ()) {
+    let state = get_xde_state();
+
+    // Collect all the autonomous packets from every device, then drop the lock
+    // and deliver them all at once.
+    let mut postbox = Postbox::new();
+    let devmap = {
+        let devs = state.devs.read();
+        for dev in devs.iter() {
+            for (dir, pkt) in dev.port.network().autonomous_packets() {
+                match dir {
+                    Direction::In => {
+                        // TODO-correctness: We're delivering these packets
+                        // directly to the guest. It might be more prudent to
+                        // pass it through the normal `port.process()` pipeline.
+                        postbox.post(dev.postbox_key, pkt);
+                    }
+                    Direction::Out => {
+                        // TODO-completeness: Handle outbound autonomous packets.
+                    }
+                }
+            }
+        }
+        if postbox.is_empty() {
+            return;
+        }
+        Arc::new(devs.clone())
+    };
+    devmap.deliver_all(postbox);
 }
 
 #[unsafe(no_mangle)]
@@ -2451,7 +2508,7 @@ fn select_nexthops(
 /// replication based on the XDE-wide multicast forwarding table.
 ///
 /// Always delivers to local same-sled subscribers regardless of replication mode.
-/// Routes to next hop unicast addresses for ALL replication modes to determine
+/// Routes to next hop unicast addresses for every replication mode to determine
 /// reachability and underlay port/MAC. Packet destination is always the multicast
 /// address with multicast MAC. The [`Replication`] type is a Tx-only instruction
 /// telling the switch which port groups to replicate to: External (front panel),
@@ -2477,11 +2534,19 @@ fn handle_mcast_tx<'a>(
         + usize::from(ctx.tun_meoi.meoi_l3hlen)
         + usize::from(ctx.tun_meoi.meoi_l4hlen);
 
-    // Local same-sled delivery: always deliver to subscribers on this sled,
-    // independent of the Tx-only Replication instruction (not an access control mechanism).
+    // Local same-sled delivery on the guest-originated (Tx) path. The M2P
+    // lookup in the overlay layer must have already admitted the sending
+    // guest's packet. This loop decides the other local ports who should
+    // receive a copy.
+    //
+    // Rx fan-out is separate; `handle_mcast_rx` handles copies arriving from
+    // the underlay.
+    //
+    // We always deliver to subscribers on this sled, independent of the Tx-only
+    // Replication instruction (not an access control mechanism).
     //
     // The Replication type only affects how switches handle the packet on Tx.
-    // Subscription is keyed by underlay (outer) IPv6 multicast address.
+    // Subscription is keyed by the underlay (outer) IPv6 multicast address.
     let underlay_addr =
         oxide_vpc::api::Ipv6Addr::from(ctx.underlay_dst.bytes());
     let group_key = MulticastUnderlay::new_unchecked(underlay_addr);
@@ -2755,12 +2820,26 @@ fn handle_mcast_tx<'a>(
 
 /// Handle multicast packet reception from the underlay.
 ///
-/// OPTE is always a leaf node in the multicast replication tree.
-/// This function only delivers packets to local subscribers.
+/// This is the multicast Rx path. A packet addressed to an admin-local
+/// underlay group still arrives encapsulated, whether a guest on another sled
+/// or a source outside the rack was the sender, and then we fan it out to the
+/// ports on this sled that are subscribed to that group. Each copy must go
+/// through the member's source filter, and is decapsulated by the port's
+/// inbound processing.
+///
+/// Note: OPTE is always a leaf node in the multicast replication tree; no
+/// further replication toward the underlay (or across transit, or anything
+/// similar) can happen here.
+///
+/// There is no per-packet M2P lookup here. Subscriptions are keyed
+/// by the underlay group. Subscribe translates an overlay group through
+/// M2P, or accepts an admin-local IPv6 group directly if no mapping exists.
+/// Unsubscribe uses M2P and leaves subscriptions unchanged when no mapping
+/// exists. The Tx path, where M2P decides which overlay groups a guest may
+/// send to, lives in the overlay layer's encap action.
 ///
 /// The Replication type is Tx-only (instructions to the switch), so the
-/// replication field is ignored on Rx. Local delivery is based purely on
-/// subscriptions.
+/// replication field is ignored on Rx.
 fn handle_mcast_rx(
     ctx: MulticastRxContext,
     stream: &DlsStream,
@@ -3466,7 +3545,7 @@ fn new_port(
     // construct a new one, so the unwrap is safe.
     let limit =
         NonZeroU32::new(FW_FT_LIMIT.get().max(nat_ft_limit.get())).unwrap();
-    let net = VpcNetwork { cfg, v2b };
+    let net = VpcNetwork::new(cfg, v2b);
     let port = Arc::new(pb.create(net, limit, limit)?);
     Ok(port)
 }
@@ -4113,6 +4192,15 @@ fn set_mcast_forwarding_hdlr(
             });
         }
 
+        // The aggregated source filter is operator-supplied, so it is held to
+        // the same rules as a subscriber's filter.
+        if let Err(e) = entry.source_filter.validate_sources() {
+            return Err(OpteError::System {
+                errno: EINVAL,
+                msg: e.to_string(),
+            });
+        }
+
         // Reject `Reserved`. It serves no replication target, so the Tx-side
         // selection never picks such a hop and an accepted one would silently
         // drop the group's traffic with no telemetry.
@@ -4293,23 +4381,10 @@ fn mcast_subscribe_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         }
 
         // Validate source filter: sources must contain valid unicast addresses
-        for src in req.filter.sources() {
-            if src.is_multicast() {
-                return Err(OpteError::BadState(format!(
-                    "source filter address {src} is multicast"
-                )));
-            }
+        req.filter
+            .validate_sources_for_group(req.group)
+            .map_err(|e| OpteError::BadState(e.to_string()))?;
 
-            if src.is_unspecified()
-                || src.is_loopback()
-                || src.is_broadcast()
-                || src.is_link_local()
-            {
-                return Err(OpteError::BadState(format!(
-                    "source filter address {src} is a special-use address"
-                )));
-            }
-        }
         let group_key = match req.group {
             oxide_vpc::api::IpAddr::Ip6(ip6) => {
                 // If an overlay->underlay mapping exists, use it; otherwise, if the
